@@ -135,6 +135,8 @@ export type Schedule<T = string> = {
   callback: string;
   /** Data to be passed to the callback */
   payload: T;
+  /** Description for the scheduled task */
+  description?: string;
 } & (
   | {
       /** Type of schedule for one-time execution at a specific time */
@@ -292,6 +294,19 @@ export class Agent<Env, State = unknown> extends Server<Env> {
           created_at INTEGER DEFAULT (unixepoch())
         )
       `;
+
+        // Poor man's migration.
+        const rows = this.sql`
+        SELECT name 
+        FROM pragma_table_info('cf_agents_schedules') 
+        WHERE name = 'description';
+      `;
+        if (rows.length !== 1) {
+          const rows = this.sql`
+            ALTER TABLE cf_agents_schedules 
+            ADD COLUMN description TEXT
+          `;
+        }
 
         // execute any pending alarms and schedule the next alarm
         await this.alarm();
@@ -508,7 +523,7 @@ export class Agent<Env, State = unknown> extends Server<Env> {
   async schedule<T = string>(
     when: Date | string | number,
     callback: keyof this,
-    payload?: T
+    options?: { payload?: T; description?: string }
   ): Promise<Schedule<T>> {
     const id = nanoid(9);
 
@@ -523,10 +538,10 @@ export class Agent<Env, State = unknown> extends Server<Env> {
     if (when instanceof Date) {
       const timestamp = Math.floor(when.getTime() / 1000);
       this.sql`
-        INSERT OR REPLACE INTO cf_agents_schedules (id, callback, payload, type, time)
+        INSERT OR REPLACE INTO cf_agents_schedules (id, callback, payload, type, time, description)
         VALUES (${id}, ${callback}, ${JSON.stringify(
-          payload
-        )}, 'scheduled', ${timestamp})
+          options?.payload
+        )}, 'scheduled', ${timestamp}, ${options?.description ?? null})
       `;
 
       await this.#scheduleNextAlarm();
@@ -534,7 +549,8 @@ export class Agent<Env, State = unknown> extends Server<Env> {
       return {
         id,
         callback: callback,
-        payload: payload as T,
+        payload: options?.payload as T,
+        description: options?.description,
         time: timestamp,
         type: "scheduled",
       };
@@ -544,10 +560,10 @@ export class Agent<Env, State = unknown> extends Server<Env> {
       const timestamp = Math.floor(time.getTime() / 1000);
 
       this.sql`
-        INSERT OR REPLACE INTO cf_agents_schedules (id, callback, payload, type, delayInSeconds, time)
+        INSERT OR REPLACE INTO cf_agents_schedules (id, callback, payload, type, delayInSeconds, time, description)
         VALUES (${id}, ${callback}, ${JSON.stringify(
-          payload
-        )}, 'delayed', ${when}, ${timestamp})
+          options?.payload
+        )}, 'delayed', ${when}, ${timestamp}, ${options?.description ?? null})
       `;
 
       await this.#scheduleNextAlarm();
@@ -555,7 +571,8 @@ export class Agent<Env, State = unknown> extends Server<Env> {
       return {
         id,
         callback: callback,
-        payload: payload as T,
+        payload: options?.payload as T,
+        description: options?.description,
         delayInSeconds: when,
         time: timestamp,
         type: "delayed",
@@ -566,10 +583,10 @@ export class Agent<Env, State = unknown> extends Server<Env> {
       const timestamp = Math.floor(nextExecutionTime.getTime() / 1000);
 
       this.sql`
-        INSERT OR REPLACE INTO cf_agents_schedules (id, callback, payload, type, cron, time)
+        INSERT OR REPLACE INTO cf_agents_schedules (id, callback, payload, type, cron, time, description)
         VALUES (${id}, ${callback}, ${JSON.stringify(
-          payload
-        )}, 'cron', ${when}, ${timestamp})
+          options?.payload
+        )}, 'cron', ${when}, ${timestamp}, ${options?.description ?? null})
       `;
 
       await this.#scheduleNextAlarm();
@@ -577,7 +594,8 @@ export class Agent<Env, State = unknown> extends Server<Env> {
       return {
         id,
         callback: callback,
-        payload: payload as T,
+        payload: options?.payload as T,
+        description: options?.description,
         cron: when,
         time: timestamp,
         type: "cron",
